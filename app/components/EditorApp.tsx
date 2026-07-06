@@ -20,8 +20,15 @@ import {
 } from "../lib/state";
 import { decodeShare, encodeShare } from "../lib/share";
 import { parseRawConfig } from "../lib/config";
-import { configureSecure, renderDiagram, renderForRaster, validate, type RenderOutput } from "../lib/mermaid";
-import { downloadSvg, rasterizeSvgString, triggerDownload } from "../lib/export";
+import {
+  configureSecure,
+  renderDiagram,
+  renderFlattenedExportSvg,
+  renderForRaster,
+  validate,
+  type RenderOutput,
+} from "../lib/mermaid";
+import { downloadSvg, rasterizeSvgString, svgToRasterBlob, triggerDownload } from "../lib/export";
 
 export default function EditorApp() {
   const [state, dispatch] = useReducer(reducer, null, (): State => {
@@ -114,26 +121,39 @@ export default function EditorApp() {
   }, [debouncedCode, state.visual, state.secure, parsedOverride, fontsReady]);
 
   // ---- Actions -------------------------------------------------------------
-  const handleExportSvg = useCallback(() => {
-    const svg = viewerRef.current?.getSvg();
-    if (svg) downloadSvg(svg);
-  }, []);
+  // Math (`$$…$$`) can't survive export as <foreignObject> (raster taints the
+  // canvas; standalone SVG lacks KaTeX CSS/fonts). For those diagrams we render
+  // a flattened, self-contained SVG (native <text>/<rect>, fonts embedded).
+  const handleExportSvg = useCallback(async () => {
+    try {
+      if (state.code.includes("$$")) {
+        downloadSvg(await renderFlattenedExportSvg(state.code, state.visual, parsedOverride));
+        return;
+      }
+      const svg = viewerRef.current?.getSvg();
+      if (svg) downloadSvg(svg);
+    } catch (e) {
+      console.error("Export failed", e);
+      alert("Export failed: " + ((e as Error)?.message ?? String(e)));
+    }
+  }, [state.code, state.visual, parsedOverride]);
 
   const handleExportRaster = useCallback(
     async (format: "png" | "jpeg") => {
       if (!renderOut) return;
       dispatch({ type: "patchUi", patch: { exportFormat: format } });
       try {
-        // Raster export uses a dedicated render with HTML labels off so the SVG
-        // has no <foreignObject> (which would taint the canvas). The vector SVG
-        // export keeps the on-screen look.
-        const svgString = await renderForRaster(state.code, state.visual, parsedOverride);
-        const blob = await rasterizeSvgString(svgString, {
-          scale: state.ui.exportScale,
-          bg: state.ui.exportBg,
-          format,
-          embedFontFamily: state.visual.fontFamily,
-        });
+        const opts = { scale: state.ui.exportScale, bg: state.ui.exportBg, format };
+        let blob: Blob;
+        if (state.code.includes("$$")) {
+          // Flattened SVG is already foreignObject-free and font-embedded.
+          const svg = await renderFlattenedExportSvg(state.code, state.visual, parsedOverride);
+          blob = await svgToRasterBlob(svg, opts);
+        } else {
+          // No math: HTML labels off avoids <foreignObject> (which taints the canvas).
+          const svgString = await renderForRaster(state.code, state.visual, parsedOverride);
+          blob = await rasterizeSvgString(svgString, { ...opts, embedFontFamily: state.visual.fontFamily });
+        }
         triggerDownload(blob, `diagram.${format === "jpeg" ? "jpg" : "png"}`);
       } catch (e) {
         console.error("Export failed", e);

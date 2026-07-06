@@ -26,6 +26,12 @@ export interface VisualConfig {
   look: Look;
   curve: Curve;
   htmlLabels: boolean;
+  /**
+   * Render `$$…$$` math with KaTeX's own HTML+CSS (mermaid's `output:"htmlAndMathml"`)
+   * instead of raw MathML. Consistent across browsers/OS, and required for math to
+   * survive PNG/SVG export (see `mathFlatten.ts`).
+   */
+  forceLegacyMathML: boolean;
   /** Only meaningful when `theme === "base"`. */
   themeVariables: Record<string, string>;
 }
@@ -113,6 +119,7 @@ export const DEFAULT_VISUAL: VisualConfig = {
   look: "classic",
   curve: "basis",
   htmlLabels: true,
+  forceLegacyMathML: true,
   themeVariables: {},
 };
 
@@ -150,6 +157,7 @@ export function buildVisualConfig(
     theme: visual.theme,
     look: visual.look,
     fontFamily: visual.fontFamily,
+    forceLegacyMathML: visual.forceLegacyMathML,
     flowchart: { curve: visual.curve, htmlLabels: visual.htmlLabels },
   };
   if (visual.theme === "base" && Object.keys(visual.themeVariables).length > 0) {
@@ -225,6 +233,7 @@ export function parseConfigIntoVisual(
   if (typeof o.theme === "string" && THEME_VALUES.has(o.theme)) next.theme = o.theme as Theme;
   if (typeof o.fontFamily === "string") next.fontFamily = o.fontFamily;
   if (typeof o.look === "string" && LOOK_VALUES.has(o.look)) next.look = o.look as Look;
+  if (typeof o.forceLegacyMathML === "boolean") next.forceLegacyMathML = o.forceLegacyMathML;
   if (isPlainObject(o.flowchart)) {
     const fc = o.flowchart;
     if (typeof fc.curve === "string" && CURVE_VALUES.has(fc.curve)) next.curve = fc.curve as Curve;

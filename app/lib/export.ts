@@ -2,6 +2,8 @@
 // its size from the viewBox, serialize, then (for raster) rasterize through an
 // <img> + <canvas>. Notes on the tricky bits are inline.
 
+const SVGNS = "http://www.w3.org/2000/svg";
+
 export type RasterFormat = "png" | "jpeg";
 
 export interface RasterOptions {
@@ -53,14 +55,25 @@ function arrayBufferToBase64(buf: ArrayBuffer): string {
   return btoa(bin);
 }
 
+/** Lowercased first family token, unquoted (e.g. `"KaTeX_Math", serif` -> `katex_math`). */
+function familyKey(family: string): string {
+  return (family.split(",")[0] ?? "").replace(/["']/g, "").trim().toLowerCase();
+}
+
 /**
- * Best-effort: find same-origin @font-face rules for `family`, fetch the files,
- * and return an inlineable `<style>` block. Cross-origin / unavailable fonts are
- * skipped silently (system fonts simply match nothing and render natively).
+ * Best-effort: find same-origin @font-face rules whose family (first token) is
+ * in `families`, fetch the files, and return an inlineable `<style>` block. All
+ * matching weights/styles are collected (so bold/italic math survive). Cross-
+ * origin / unavailable fonts are skipped silently (system fonts match nothing
+ * and render natively).
  */
-async function collectFontFaceCss(family: string): Promise<string> {
-  const wanted = family.split(",")[0].replace(/["']/g, "").trim().toLowerCase();
-  if (!wanted) return "";
+async function collectFontFaceCss(families: Set<string>): Promise<string> {
+  const wanted = new Set<string>();
+  for (const f of families) {
+    const k = familyKey(f);
+    if (k) wanted.add(k);
+  }
+  if (wanted.size === 0) return "";
   const faces: string[] = [];
   for (const sheet of Array.from(document.styleSheets)) {
     let rules: CSSRuleList | null = null;
@@ -72,20 +85,28 @@ async function collectFontFaceCss(family: string): Promise<string> {
     if (!rules) continue;
     for (const rule of Array.from(rules)) {
       if (!(rule instanceof CSSFontFaceRule)) continue;
-      const ff = rule.style.getPropertyValue("font-family").replace(/["']/g, "").trim().toLowerCase();
-      if (ff !== wanted) continue;
+      const ffRaw = rule.style.getPropertyValue("font-family").replace(/["']/g, "").trim();
+      if (!wanted.has(ffRaw.toLowerCase())) continue;
       const src = rule.style.getPropertyValue("src");
       const match = /url\(["']?([^"')]+)["']?\)/.exec(src);
       if (!match) continue;
+      // `src` urls are relative to the stylesheet (e.g. `../media/…woff2`), not
+      // the document — resolve against the sheet's href before fetching.
+      let href = match[1];
       try {
-        const res = await fetch(match[1]);
+        href = new URL(match[1], sheet.href ?? document.baseURI).href;
+      } catch {
+        /* keep the raw url */
+      }
+      try {
+        const res = await fetch(href);
         if (!res.ok) continue;
         const b64 = arrayBufferToBase64(await res.arrayBuffer());
         const fmt = /\.woff2|format\(["']?woff2/.test(src) ? "woff2" : /woff/.test(src) ? "woff" : "truetype";
         const weight = rule.style.getPropertyValue("font-weight") || "normal";
         const style = rule.style.getPropertyValue("font-style") || "normal";
         faces.push(
-          `@font-face{font-family:'${ff}';font-weight:${weight};font-style:${style};` +
+          `@font-face{font-family:'${ffRaw}';font-weight:${weight};font-style:${style};` +
             `src:url(data:font/${fmt};base64,${b64}) format('${fmt}');}`,
         );
       } catch {
@@ -94,6 +115,15 @@ async function collectFontFaceCss(family: string): Promise<string> {
     }
   }
   return faces.join("\n");
+}
+
+/** Inline the @font-face rules for `families` as a `<style>` first-child of `svg`. */
+export async function embedFontFaces(svg: SVGSVGElement, families: Set<string>): Promise<void> {
+  const css = await collectFontFaceCss(families);
+  if (!css) return;
+  const style = document.createElementNS(SVGNS, "style");
+  style.textContent = css;
+  svg.insertBefore(style, svg.firstChild);
 }
 
 /** Clone the SVG and normalize it to a fixed pixel size (base × scale), keeping the viewBox. */
@@ -156,12 +186,7 @@ export async function svgToRasterBlob(svg: SVGSVGElement, opts: RasterOptions): 
   const { clone, outW, outH } = prepareClone(svg, opts.scale);
 
   if (opts.embedFontFamily) {
-    const css = await collectFontFaceCss(opts.embedFontFamily);
-    if (css) {
-      const style = document.createElementNS("http://www.w3.org/2000/svg", "style");
-      style.textContent = css;
-      clone.insertBefore(style, clone.firstChild);
-    }
+    await embedFontFaces(clone, new Set([opts.embedFontFamily]));
   }
 
   const url = URL.createObjectURL(new Blob([serialize(clone)], { type: "image/svg+xml;charset=utf-8" }));

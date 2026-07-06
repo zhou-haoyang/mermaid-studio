@@ -106,6 +106,21 @@ export default function ConfigPanel({
                 </span>
               </span>
             </label>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={visual.forceLegacyMathML}
+                onChange={(e) => dispatch({ type: "patchVisual", patch: { forceLegacyMathML: e.target.checked } })}
+              />
+              <span className="text-foreground/70">
+                Force KaTeX for math
+                <span className="mt-0.5 block text-xs text-foreground/45">
+                  Renders <code>$$…$$</code> with KaTeX&apos;s own fonts for consistent math across browsers/OS
+                  (and lets it survive PNG/SVG export).
+                </span>
+              </span>
+            </label>
           </Section>
 
           <Section title="Theme variables">

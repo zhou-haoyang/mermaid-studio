@@ -10,6 +10,8 @@ import {
   type SecureConfig,
   type VisualConfig,
 } from "./config";
+import { flattenForeignObjects } from "./mathFlatten";
+import { embedFontFaces } from "./export";
 
 type MermaidModule = typeof import("mermaid")["default"];
 
@@ -31,6 +33,27 @@ async function getMermaid(): Promise<MermaidModule> {
 // counter never has to worry about reuse.
 let idSeq = 0;
 const nextId = () => `mermaid-render-${++idSeq}`;
+
+// KaTeX web fonts load lazily on first use, but mermaid measures a math label's
+// box during `render` — if the fonts aren't in yet it sizes to the (narrower)
+// fallback metrics and the real KaTeX text gets clipped on the right. Preload
+// every registered `KaTeX_*` face before rendering any diagram containing math.
+let _mathFontsLoaded = false;
+async function ensureMathFonts(code: string): Promise<void> {
+  if (_mathFontsLoaded || !code.includes("$$")) return;
+  const fonts = document.fonts;
+  if (!fonts) return;
+  const loads: Promise<unknown>[] = [];
+  let found = 0;
+  fonts.forEach((f) => {
+    if (!/^KaTeX_/.test(f.family)) return;
+    found++;
+    if (f.status !== "loaded") loads.push(f.load().catch(() => {}));
+  });
+  if (found === 0) return; // faces not registered yet — retry on the next render
+  if (loads.length) await Promise.all(loads);
+  _mathFontsLoaded = true;
+}
 
 /** Apply the secure-only keys (mermaid refuses to let directives change these). */
 export async function configureSecure(secure: SecureConfig): Promise<void> {
@@ -77,6 +100,7 @@ export async function renderDiagram(
   hidden: HTMLElement,
 ): Promise<RenderOutput> {
   const mermaid = await getMermaid();
+  await ensureMathFonts(code);
   const id = nextId();
   const source = buildInitDirective(visual, rawOverride) + code;
   try {
@@ -114,6 +138,50 @@ export async function renderForRaster(
   try {
     const { svg } = await mermaid.render(id, `%%{init: ${JSON.stringify(cfg)}}%%\n` + code, host);
     return svg;
+  } finally {
+    document.getElementById(id)?.remove();
+    document.getElementById("d" + id)?.remove();
+    host.remove();
+  }
+}
+
+/**
+ * Render an export-ready SVG element for diagrams containing `$$…$$` math.
+ * Renders with HTML labels + `forceLegacyMathML` so KaTeX emits real HTML, then
+ * rebuilds every `<foreignObject>` (math and text labels) as native SVG and
+ * embeds the fonts used. The result has NO foreignObject/MathML, so it both
+ * rasterizes without tainting the canvas and is a self-contained vector SVG.
+ * Returns a detached clone (its temporary host is cleaned up).
+ */
+export async function renderFlattenedExportSvg(
+  code: string,
+  visual: VisualConfig,
+  rawOverride: Record<string, unknown> | null,
+): Promise<SVGSVGElement> {
+  const mermaid = await getMermaid();
+  await ensureMathFonts(code);
+  const id = nextId();
+  const cfg = buildVisualConfig({ ...visual, htmlLabels: true, forceLegacyMathML: true }, rawOverride);
+  // Force these on regardless of any rawOverride — flattening needs KaTeX HTML.
+  cfg.htmlLabels = true;
+  cfg.forceLegacyMathML = true;
+  cfg.flowchart = { ...((cfg.flowchart as Record<string, unknown>) ?? {}), htmlLabels: true };
+
+  // Mounted + laid out (NOT display:none / height:0) so geometry is measurable.
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-99999px;top:0;opacity:0;pointer-events:none;";
+  document.body.appendChild(host);
+  try {
+    const { svg: svgString } = await mermaid.render(id, `%%{init: ${JSON.stringify(cfg)}}%%\n` + code, host);
+    host.innerHTML = svgString;
+    const svg = host.querySelector("svg");
+    if (!svg) throw new Error("renderFlattenedExportSvg: no SVG produced");
+    void svg.getBoundingClientRect(); // force layout, then wait for KaTeX fonts
+    if (document.fonts?.ready) await document.fonts.ready;
+
+    const families = flattenForeignObjects(svg as SVGSVGElement);
+    await embedFontFaces(svg as SVGSVGElement, families);
+    return svg.cloneNode(true) as SVGSVGElement;
   } finally {
     document.getElementById(id)?.remove();
     document.getElementById("d" + id)?.remove();
