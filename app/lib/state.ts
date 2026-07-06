@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 import {
   DEFAULT_SECURE,
   DEFAULT_VISUAL,
+  parseConfigIntoVisual,
+  parseRawConfig,
+  serializeConfig,
   type SecureConfig,
   type VisualConfig,
 } from "./config";
@@ -41,13 +44,27 @@ export const DEFAULT_UI: UiState = {
   exportFormat: "png",
 };
 
+/** The default visual config, rendered into the raw box so it starts populated & in sync. */
+const DEFAULT_RAW = serializeConfig(DEFAULT_VISUAL, null);
+
 export const DEFAULT_STATE: State = {
   code: DEFAULT_TEMPLATE_CODE,
   visual: DEFAULT_VISUAL,
   secure: DEFAULT_SECURE,
-  rawOverride: null,
+  rawOverride: DEFAULT_RAW,
   ui: DEFAULT_UI,
 };
+
+/**
+ * Make `visual` and `rawOverride` mutually consistent after a load/share/hydrate.
+ * If the raw box holds a valid config it wins (its keys flow into the controls);
+ * otherwise the box is regenerated from the typed visual config.
+ */
+export function reconcileConfig(state: State): State {
+  const parsed = parseRawConfig(state.rawOverride);
+  if (parsed) return { ...state, visual: parseConfigIntoVisual(parsed, state.visual) };
+  return { ...state, rawOverride: serializeConfig(state.visual, null) };
+}
 
 export type Action =
   | { type: "setCode"; code: string }
@@ -65,8 +82,11 @@ export function reducer(state: State, action: Action): State {
     case "setCode":
     case "loadTemplate":
       return { ...state, code: action.code };
-    case "patchVisual":
-      return { ...state, visual: { ...state.visual, ...action.patch } };
+    case "patchVisual": {
+      // A control moved → update the typed config and mirror it into the raw box.
+      const visual = { ...state.visual, ...action.patch };
+      return { ...state, visual, rawOverride: serializeConfig(visual, state.rawOverride) };
+    }
     case "patchSecure":
       return { ...state, secure: { ...state.secure, ...action.patch } };
     case "patchUi":
@@ -75,12 +95,18 @@ export function reducer(state: State, action: Action): State {
       const next = { ...state.visual.themeVariables };
       if (action.value === null) delete next[action.key];
       else next[action.key] = action.value;
-      return { ...state, visual: { ...state.visual, themeVariables: next } };
+      const visual = { ...state.visual, themeVariables: next };
+      return { ...state, visual, rawOverride: serializeConfig(visual, state.rawOverride) };
     }
-    case "setRaw":
-      return { ...state, rawOverride: action.raw };
+    case "setRaw": {
+      // The raw box was edited → keep the exact text and push recognized keys
+      // back into the typed controls (skip when the JSON is mid-edit / invalid).
+      const parsed = parseRawConfig(action.raw);
+      const visual = parsed ? parseConfigIntoVisual(parsed, state.visual) : state.visual;
+      return { ...state, rawOverride: action.raw, visual };
+    }
     case "hydrate":
-      return action.state;
+      return reconcileConfig(action.state);
     case "reset":
       return { ...DEFAULT_STATE, ui: state.ui };
     default:
@@ -96,13 +122,13 @@ const SCHEMA_VERSION = 1;
 /** Merge a possibly-partial stored state onto defaults so new fields never break older saves. */
 function mergeWithDefaults(stored: Partial<State> | undefined): State {
   if (!stored || typeof stored !== "object") return DEFAULT_STATE;
-  return {
+  return reconcileConfig({
     code: typeof stored.code === "string" ? stored.code : DEFAULT_STATE.code,
     visual: { ...DEFAULT_VISUAL, ...(stored.visual ?? {}) },
     secure: { ...DEFAULT_SECURE, ...(stored.secure ?? {}) },
     rawOverride: typeof stored.rawOverride === "string" ? stored.rawOverride : null,
     ui: { ...DEFAULT_UI, ...(stored.ui ?? {}) },
-  };
+  });
 }
 
 export function saveState(state: State): void {
@@ -146,13 +172,13 @@ export function toSnapshot(state: State): ShareSnapshot {
 /** Apply a decoded snapshot onto the current state (keeps local UI prefs). */
 export function fromSnapshot(snapshot: Partial<ShareSnapshot> | null, base: State): State {
   if (!snapshot || typeof snapshot !== "object") return base;
-  return {
+  return reconcileConfig({
     ...base,
     code: typeof snapshot.code === "string" ? snapshot.code : base.code,
     visual: { ...DEFAULT_VISUAL, ...(snapshot.visual ?? {}) },
     secure: { ...DEFAULT_SECURE, ...(snapshot.secure ?? {}) },
     rawOverride: typeof snapshot.rawOverride === "string" ? snapshot.rawOverride : null,
-  };
+  });
 }
 
 // ---- Hooks -----------------------------------------------------------------

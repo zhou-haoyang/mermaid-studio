@@ -19,6 +19,7 @@ import {
   type State,
 } from "../lib/state";
 import { decodeShare, encodeShare } from "../lib/share";
+import { parseRawConfig } from "../lib/config";
 import { configureSecure, renderDiagram, renderForRaster, validate, type RenderOutput } from "../lib/mermaid";
 import { downloadSvg, rasterizeSvgString, triggerDownload } from "../lib/export";
 
@@ -72,15 +73,7 @@ export default function EditorApp() {
   }, [debouncedState]);
 
   // ---- Render pipeline -----------------------------------------------------
-  const parsedOverride = useMemo<Record<string, unknown> | null>(() => {
-    if (!state.rawOverride || !state.rawOverride.trim()) return null;
-    try {
-      const p = JSON.parse(state.rawOverride);
-      return p && typeof p === "object" && !Array.isArray(p) ? (p as Record<string, unknown>) : null;
-    } catch {
-      return null;
-    }
-  }, [state.rawOverride]);
+  const parsedOverride = useMemo(() => parseRawConfig(state.rawOverride), [state.rawOverride]);
 
   const debouncedCode = useDebouncedValue(state.code, 300);
 

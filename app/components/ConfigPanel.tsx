@@ -190,9 +190,10 @@ export default function ConfigPanel({
             </label>
           </Section>
 
-          <Section title="Raw config override">
+          <Section title="Config (JSON)">
             <p className="text-xs text-foreground/45">
-              Advanced: a JSON object merged on top of the config above (per-render).
+              The live diagram config, kept in sync with the controls above — edit either side.
+              Advanced keys with no control (e.g. <code>flowchart.nodeSpacing</code>) are preserved.
             </p>
             <textarea
               spellCheck={false}
