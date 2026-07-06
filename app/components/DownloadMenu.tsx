@@ -2,7 +2,7 @@
 
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Download, FileCode, FileImage } from "lucide-react";
+import { Check, ChevronDown, Copy, Download, FileCode, FileImage } from "lucide-react";
 import type { ExportScale } from "../lib/state";
 
 interface DownloadMenuProps {
@@ -12,6 +12,8 @@ interface DownloadMenuProps {
   onBgChange: (bg: string) => void;
   onExportSvg: () => void;
   onExportRaster: (format: "png" | "jpeg") => void;
+  onCopySvg: () => Promise<boolean>;
+  onCopyPng: () => Promise<boolean>;
   disabled: boolean;
 }
 
@@ -29,13 +31,25 @@ export default function DownloadMenu({
   onBgChange,
   onExportSvg,
   onExportRaster,
+  onCopySvg,
+  onCopyPng,
   disabled,
 }: DownloadMenuProps) {
   const btnRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState({ top: 0, right: 0 });
+  const [copied, setCopied] = useState<"svg" | "png" | null>(null);
   const isCustomBg = !BG_SWATCHES.some((s) => s.value === bg);
   const close = () => setOpen(false);
+
+  // Copy keeps the menu open so the transient "Copied!" confirmation is visible.
+  const runCopy = async (kind: "svg" | "png", fn: () => Promise<boolean>) => {
+    const ok = await fn();
+    if (ok) {
+      setCopied(kind);
+      setTimeout(() => setCopied(null), 1800);
+    }
+  };
 
   // Anchor the (portaled) menu under the button, in viewport coordinates.
   useLayoutEffect(() => {
@@ -163,6 +177,36 @@ export default function DownloadMenu({
                 >
                   <FileImage size={15} className="text-foreground/60" />
                   Download JPEG <span className="ml-auto text-xs text-foreground/40">{scale}× raster</span>
+                </button>
+              </div>
+
+              <div className="mt-2 flex flex-col gap-1 border-t border-black/10 pt-2 dark:border-white/10">
+                <div className="px-2 pb-0.5 text-xs font-medium text-foreground/60">Copy to clipboard</div>
+                <button
+                  type="button"
+                  onClick={() => runCopy("svg", onCopySvg)}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-foreground/5"
+                >
+                  {copied === "svg" ? (
+                    <Check size={15} className="text-green-600 dark:text-green-500" />
+                  ) : (
+                    <Copy size={15} className="text-foreground/60" />
+                  )}
+                  {copied === "svg" ? "Copied!" : "Copy SVG"}
+                  <span className="ml-auto text-xs text-foreground/40">markup</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => runCopy("png", onCopyPng)}
+                  className="flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-foreground/5"
+                >
+                  {copied === "png" ? (
+                    <Check size={15} className="text-green-600 dark:text-green-500" />
+                  ) : (
+                    <Copy size={15} className="text-foreground/60" />
+                  )}
+                  {copied === "png" ? "Copied!" : "Copy PNG"}
+                  <span className="ml-auto text-xs text-foreground/40">{scale}× image</span>
                 </button>
               </div>
             </div>

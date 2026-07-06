@@ -158,10 +158,14 @@ export function triggerDownload(blob: Blob, filename: string): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Standalone, scalable SVG markup for the diagram (same normalization as downloadSvg). */
+export function svgToString(svg: SVGSVGElement): string {
+  return serialize(prepareClone(svg, 1).clone);
+}
+
 /** Download the diagram as a standalone, scalable `.svg`. */
 export function downloadSvg(svg: SVGSVGElement, filename = "diagram.svg"): void {
-  const { clone } = prepareClone(svg, 1);
-  const blob = new Blob([serialize(clone)], { type: "image/svg+xml;charset=utf-8" });
+  const blob = new Blob([svgToString(svg)], { type: "image/svg+xml;charset=utf-8" });
   triggerDownload(blob, filename);
 }
 

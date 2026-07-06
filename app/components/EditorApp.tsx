@@ -28,7 +28,7 @@ import {
   validate,
   type RenderOutput,
 } from "../lib/mermaid";
-import { downloadSvg, rasterizeSvgString, svgToRasterBlob, triggerDownload } from "../lib/export";
+import { downloadSvg, rasterizeSvgString, svgToRasterBlob, svgToString, triggerDownload } from "../lib/export";
 
 export default function EditorApp() {
   const [state, dispatch] = useReducer(reducer, null, (): State => {
@@ -163,6 +163,45 @@ export default function EditorApp() {
     [renderOut, state.code, state.visual, state.ui.exportScale, state.ui.exportBg, parsedOverride],
   );
 
+  // Copy variants of the export actions: same rendering pipeline, but write to the
+  // clipboard instead of downloading. SVG goes as markup text; PNG as an image.
+  const handleCopySvg = useCallback(async () => {
+    try {
+      let svgString: string;
+      if (state.code.includes("$$")) {
+        svgString = svgToString(await renderFlattenedExportSvg(state.code, state.visual, parsedOverride));
+      } else {
+        const svg = viewerRef.current?.getSvg();
+        if (!svg) return false;
+        svgString = svgToString(svg);
+      }
+      await navigator.clipboard.writeText(svgString);
+      return true;
+    } catch (e) {
+      console.error("Copy SVG failed", e);
+      return false;
+    }
+  }, [state.code, state.visual, parsedOverride]);
+
+  const handleCopyPng = useCallback(async () => {
+    if (!renderOut) return false;
+    try {
+      const opts = { scale: state.ui.exportScale, bg: state.ui.exportBg, format: "png" as const };
+      // Pass a Promise<Blob> to ClipboardItem and call write() synchronously so Safari
+      // keeps the click's transient user-activation (blob production is async).
+      const blobPromise = state.code.includes("$$")
+        ? renderFlattenedExportSvg(state.code, state.visual, parsedOverride).then((svg) => svgToRasterBlob(svg, opts))
+        : renderForRaster(state.code, state.visual, parsedOverride).then((s) =>
+            rasterizeSvgString(s, { ...opts, embedFontFamily: state.visual.fontFamily }),
+          );
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": blobPromise })]);
+      return true;
+    } catch (e) {
+      console.error("Copy PNG failed", e);
+      return false;
+    }
+  }, [renderOut, state.code, state.visual, state.ui.exportScale, state.ui.exportBg, parsedOverride]);
+
   const handleShare = useCallback(async () => {
     window.history.replaceState(null, "", "#" + encodeShare(toSnapshot(state)));
     try {
@@ -189,6 +228,8 @@ export default function EditorApp() {
             onBgChange={(bg) => dispatch({ type: "patchUi", patch: { exportBg: bg } })}
             onExportSvg={handleExportSvg}
             onExportRaster={handleExportRaster}
+            onCopySvg={handleCopySvg}
+            onCopyPng={handleCopyPng}
             disabled={!canExport}
           />
         }
